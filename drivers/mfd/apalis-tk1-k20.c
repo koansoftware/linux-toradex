@@ -54,15 +54,15 @@ static const struct regmap_config apalis_tk1_k20_regmap_spi_config = {
 
 	.cache_type = REGCACHE_NONE,
 
-	.use_single_rw = 1,
+	.use_single_rw = 0,
 };
 
 static int apalis_tk1_k20_spi_read(void *context, const void *reg,
 		size_t reg_size, void *val, size_t val_size)
 {
-	unsigned char w[3] = {APALIS_TK1_K20_READ_INST,
-			*((unsigned char *) reg), 0};
-	unsigned char r[3];
+	unsigned char w[APALIS_TK1_K20_MAX_BULK] = {APALIS_TK1_K20_READ_INST,
+			val_size, *((unsigned char *) reg)};
+	unsigned char r[APALIS_TK1_K20_MAX_BULK];
 	unsigned char *p = val;
 	struct device *dev = context;
 	struct spi_device *spi = to_spi_device(dev);
@@ -75,24 +75,41 @@ static int apalis_tk1_k20_spi_read(void *context, const void *reg,
 	int ret;
 
 	spi->mode = SPI_MODE_1;
-	if (val_size != 1 || reg_size != 1)
+	if (reg_size != 1)
 		return -ENOTSUPP;
 
-	spi_message_init(&m);
-	spi_message_add_tail(&t, &m);
-	ret = spi_sync(spi, &m);
-	spi_message_init(&m);
-	t.len = 3;
-	spi_message_add_tail(&t, &m);
-	ret = spi_sync(spi, &m);
+	if (val_size == 1) {
+		spi_message_init(&m);
+		spi_message_add_tail(&t, &m);
+		ret = spi_sync(spi, &m);
+		spi_message_init(&m);
+		t.len = 3;
+		spi_message_add_tail(&t, &m);
+		ret = spi_sync(spi, &m);
 
-	dev_vdbg(dev, "Apalis TK1 K20 MFD SPI read reg 0x%X: 0x%X 0x%X\n",
-			*((unsigned char *) reg), r[1], r[2]);
+		if (r[1] == TK1_K20_SENTINEL)
+			memcpy(p, &r[2], 1);
+		else
+			return -EIO;
+	} else if ((val_size > 1) && (val_size < APALIS_TK1_K20_MAX_BULK)) {
+		spi_message_init(&m);
+		w[0] = APALIS_TK1_K20_BULK_READ_INST;
+		t.len = 3;
+		spi_message_add_tail(&t, &m);
+		ret = spi_sync(spi, &m);
 
-	if (r[1] == TK1_K20_SENTINEL)
-		memcpy(p, &r[2], 1);
-	else
-		return -EIO;
+		spi_message_init(&m);
+		t.len = val_size + 2; /* val_size + sentinel + fifo workaround*/
+		spi_message_add_tail(&t, &m);
+		ret = spi_sync(spi, &m);
+
+		if (r[1] == TK1_K20_SENTINEL)
+			memcpy(p, &r[2], val_size);
+		else
+			return -EIO;
+	} else {
+		return -ENOTSUPP;
+	}
 
 	return ret;
 }
@@ -102,19 +119,22 @@ static int apalis_tk1_k20_spi_write(void *context, const void *data,
 {
 	struct device *dev = context;
 	struct spi_device *spi = to_spi_device(dev);
-	uint8_t out_data[3];
+	uint8_t out_data[APALIS_TK1_K20_MAX_BULK];
 
 	spi->mode = SPI_MODE_1;
 
-	if (count != 2) {
-		dev_err(dev, "Apalis TK1 K20 MFD write count = %d\n", count);
+	if (count == 2) {
+		out_data[0] = APALIS_TK1_K20_WRITE_INST;
+		out_data[1] = ((uint8_t *)data)[0];
+		out_data[2] = ((uint8_t *)data)[1];
+	} else if ( (count > 2 ) && (count < APALIS_TK1_K20_MAX_BULK)) {
+		out_data[0] = APALIS_TK1_K20_BULK_WRITE_INST;
+		out_data[1] = count - 1;
+		memcpy(&out_data[2], data, count);
+	} else {
+		dev_err(dev, "Apalis TK1 K20 MFD Invalid write count = %d\n", count);
 		return -ENOTSUPP;
 	}
-	out_data[0] = APALIS_TK1_K20_WRITE_INST;
-	out_data[1] = ((uint8_t *)data)[0];
-	out_data[2] = ((uint8_t *)data)[1];
-	dev_vdbg(dev, "Apalis TK1 K20 MFD SPI write 0x%X 0x%X\n", out_data[1],
-			out_data[2]);
 
 	return spi_write(spi, out_data, 3);
 }
@@ -287,9 +307,10 @@ int apalis_tk1_k20_irq_free(struct apalis_tk1_k20_regmap *apalis_tk1_k20,
 }
 EXPORT_SYMBOL(apalis_tk1_k20_irq_free);
 
-static int apalis_tk1_k20_add_subdevice_pdata(
+
+static int apalis_tk1_k20_add_subdevice_pdata_id(
 		struct apalis_tk1_k20_regmap *apalis_tk1_k20, const char *name,
-		void *pdata, size_t pdata_size)
+		void *pdata, size_t pdata_size, int id)
 {
 	struct mfd_cell cell = {
 		.platform_data = pdata,
@@ -300,8 +321,16 @@ static int apalis_tk1_k20_add_subdevice_pdata(
 	if (!cell.name)
 		return -ENOMEM;
 
-	return mfd_add_devices(apalis_tk1_k20->dev, -1, &cell, 1, NULL, 0,
+	return mfd_add_devices(apalis_tk1_k20->dev, id, &cell, 1, NULL, 0,
 			       regmap_irq_get_domain(apalis_tk1_k20->irq_data));
+}
+
+static int apalis_tk1_k20_add_subdevice_pdata(
+		struct apalis_tk1_k20_regmap *apalis_tk1_k20, const char *name,
+		void *pdata, size_t pdata_size)
+{
+	return apalis_tk1_k20_add_subdevice_pdata_id(apalis_tk1_k20, name,
+			pdata, pdata_size, -1);
 }
 
 static int apalis_tk1_k20_add_subdevice(
@@ -758,7 +787,7 @@ int apalis_tk1_k20_dev_init(struct device *dev)
 	if (revision != APALIS_TK1_K20_FW_VER) {
 		dev_err(apalis_tk1_k20->dev,
 			"Unsupported firmware version %d.%d.\n",
-			((revision & 0xF0) >> 8), (revision & 0x0F));
+			((revision & 0xF0) >> 4), (revision & 0x0F));
 		ret = -ENOTSUPP;
 		goto bad;
 	}
@@ -803,6 +832,7 @@ int apalis_tk1_k20_dev_init(struct device *dev)
 					&pdata->adc, sizeof(pdata->adc));
 
 		if (apalis_tk1_k20->flags & APALIS_TK1_K20_USES_CAN) {
+			/* We have 2 CAN devices inside K20 */
 			pdata->can0.id = 0;
 			pdata->can1.id = 1;
 			apalis_tk1_k20_add_subdevice_pdata(apalis_tk1_k20,
@@ -826,8 +856,13 @@ int apalis_tk1_k20_dev_init(struct device *dev)
 					"apalis-tk1-k20-adc");
 
 		if (apalis_tk1_k20->flags & APALIS_TK1_K20_USES_CAN) {
-			apalis_tk1_k20_add_subdevice(apalis_tk1_k20,
-					"apalis-tk1-k20-can");
+			/* We have 2 CAN devices inside K20 */
+			apalis_tk1_k20_add_subdevice_pdata_id(apalis_tk1_k20,
+					"apalis-tk1-k20-can",
+					NULL, 0, 0);
+			apalis_tk1_k20_add_subdevice_pdata_id(apalis_tk1_k20,
+					"apalis-tk1-k20-can",
+					NULL, 0, 1);
 		}
 
 		if (apalis_tk1_k20->flags & APALIS_TK1_K20_USES_GPIO)
