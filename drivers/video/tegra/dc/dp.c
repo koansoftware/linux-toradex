@@ -1853,22 +1853,22 @@ static int tegra_dp_full_lt(struct tegra_dc_dp_data *dp)
 	struct tegra_dc_sor_data *sor = dp->sor;
 	int err;
 	u32 pe[4] = {
-		PRE_EMPHASIS_L0,
-		PRE_EMPHASIS_L0,
-		PRE_EMPHASIS_L0,
-		PRE_EMPHASIS_L0
+		PRE_EMPHASIS_L1,
+		PRE_EMPHASIS_L1,
+		PRE_EMPHASIS_L1,
+		PRE_EMPHASIS_L1
 	};
 	u32 vs[4] = {
-		DRIVE_CURRENT_L0,
-		DRIVE_CURRENT_L0,
-		DRIVE_CURRENT_L0,
-		DRIVE_CURRENT_L0
+		DRIVE_CURRENT_L2,
+		DRIVE_CURRENT_L2,
+		DRIVE_CURRENT_L2,
+		DRIVE_CURRENT_L2
 	};
 	u32 pc[4] = {
-		POST_CURSOR2_L0,
-		POST_CURSOR2_L0,
-		POST_CURSOR2_L0,
-		POST_CURSOR2_L0
+		POST_CURSOR2_L2,
+		POST_CURSOR2_L2,
+		POST_CURSOR2_L2,
+		POST_CURSOR2_L2
 	};
 	size_t copy_bytes = sizeof(pe[0]) * 4;
 	struct tegra_dc_dp_link_config *cfg = &dp->link_cfg;
