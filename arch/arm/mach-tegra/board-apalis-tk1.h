@@ -24,7 +24,7 @@
 #include <mach/irqs.h>
 #include "gpio-names.h"
 
-//#define APALIS_TK1_EDP
+#define APALIS_TK1_EDP
 
 /* GPIO */
 
